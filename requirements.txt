@@ -1,0 +1,16 @@
+elasticsearch
+load_dotenv
+streamlit
+python-dotenv
+sentence-transformers
+langchain_community
+langchain_elasticsearch
+langchain_aws
+langchain_cohere
+NLTK
+lark
+openai
+langchain
+jq
+elastic-apm
+boto3

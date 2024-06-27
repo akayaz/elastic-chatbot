@@ -1,4 +1,4 @@
-# stellantis-elastic-chatbot
+# service-public-elastic-chatbot
 Demo application showing how to build a chatbot experience on top of private data using Elasticsearch as vector search
 <img width="1842" alt="image" src="https://github.com/akayaz/stellantis-elastic-chatbot/assets/57957968/69000825-04f1-47a7-8091-6b010bd2664c">
 

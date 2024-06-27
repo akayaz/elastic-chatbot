@@ -6,7 +6,6 @@ from langchain.prompts.prompt import PromptTemplate
 from langchain.prompts import ChatPromptTemplate
 from operator import itemgetter
 from langchain.schema.messages import HumanMessage, SystemMessage, AIMessage
-from langchain.callbacks.streamlit.streamlit_callback_handler import StreamlitCallbackHandler
 from langchain_community.chat_models import ChatOllama
 from langchain.schema import format_document
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough

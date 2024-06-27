@@ -7,7 +7,6 @@ import elasticapm
 import streamlit as st
 from dotenv import load_dotenv
 from langchain.globals import set_debug
-from langchain.retrievers import ContextualCompressionRetriever
 from langchain_aws import ChatBedrock
 from langchain_community.chat_message_histories import StreamlitChatMessageHistory
 from langchain_community.chat_models.ollama import ChatOllama
@@ -17,7 +16,7 @@ from langchain.docstore.document import Document
 from helper import get_conversational_rag_chain
 from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
 from langchain_cohere import CohereRerank
-from langchain_community.llms import Cohere
+from langchain_openai import AzureChatOpenAI
 
 set_debug(True)
 
@@ -40,7 +39,7 @@ custom_template = """Given the following conversation and a follow-up message, \
     rephrase the follow-up message to a stand-alone question or instruction that \
     represents the user's intent, add all context needed if necessary to generate a complete and \
     unambiguous question or instruction, only based on the history, don't make up messages. \
-    Maintain the same language as the follow up input message.
+    Maintain the same language as the original question.
     Use only the provided context to answer the question, if you don't know, simply answer that you don't know.
 
     Chat History:
@@ -50,7 +49,7 @@ custom_template = """Given the following conversation and a follow-up message, \
     Standalone question or instruction:"""
 
 # streamlit UI Config
-st.set_page_config(page_title="Elastic Chatbot", page_icon=":cinema:", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Elastic Chatbot", page_icon=":fr:", initial_sidebar_state="collapsed")
 st.image(
     'https://images.contentstack.io/v3/assets/bltefdd0b53724fa2ce/blt601c406b0b5af740/620577381692951393fdf8d6'
     '/elastic-logo-cluster.svg',
@@ -61,10 +60,10 @@ with st.sidebar:
     st.subheader('Choose LLM and parameters')
     st.write("Chatbot configuration")
     st.session_state.llm_model = st.sidebar.selectbox('Choose your LLM',
-                                                      ['Ollama/Mistral', 'azure-openai',
+                                                      ['azure-openai', 'Ollama',
                                                        'bedrock'],
                                                       key='selected_model')
-    if st.session_state.llm_model == 'Ollama/Mistral':
+    if st.session_state.llm_model == 'Ollama':
         st.session_state.llm_base_url = st.sidebar.text_input('Ollama base url', OLLAMA_ENDPOINT)
 
     if st.session_state.llm_model == 'bedrock':
@@ -75,7 +74,7 @@ with st.sidebar:
                                                          help='Control the creativity of the model')
     st.subheader('Configure Retrieval parameters')
     st.session_state.k = st.sidebar.slider('Number of documents to retrieve', min_value=1, max_value=20,
-                                           value=5,
+                                           value=10,
                                            step=1, key='k_results',
                                            help='Number of documents to retrieve')
     st.session_state.num_candidates = st.sidebar.slider('Number of candidates', min_value=20, max_value=200,
@@ -87,10 +86,11 @@ with st.sidebar:
                                                          step=10,
                                                          help='RRF window size')
     st.session_state.rrf_rank_constant = st.sidebar.slider('RRF rank constant', min_value=10, max_value=70,
-                                                           value=10,
+                                                           value=20,
                                                            step=10,
                                                            help='RRF rank constant')
-    st.session_state.display_sources = st.sidebar.checkbox('Display sources', value=False)
+    st.session_state.display_sources = st.sidebar.checkbox('Display sources', value=True)
+    st.session_state.rerank_results = st.sidebar.checkbox('Rerank results', value=False)
 
 # test with streamlit context variables:
 if 'rrf_window_size' not in st.session_state:
@@ -98,7 +98,7 @@ if 'rrf_window_size' not in st.session_state:
 if 'rrf_rank_constant' not in st.session_state:
     st.session_state['rrf_rank_constant'] = 60
 if 'k' not in st.session_state:
-    st.session_state['k'] = 5
+    st.session_state['k'] = 10
 if 'num_candidates' not in st.session_state:
     st.session_state['num_candidates'] = 50
 
@@ -187,7 +187,7 @@ def rrf_retriever(search_query: str) -> Dict:
                     {
                         "knn": {
                             "field": "ml.inference.content.predicted_value",
-                            "k": 7,
+                            "k": k,
                             "num_candidates": 50,
                             "query_vector_builder": {
                                 "text_embedding": {
@@ -212,7 +212,38 @@ def rrf_retriever(search_query: str) -> Dict:
                 "window_size": st.session_state.rrf_window_size,
                 "rank_constant": st.session_state.rrf_rank_constant
             }
+        },
+        "size": k
+    }
+
+
+def hybrid_query(search_query: str) -> Dict:
+    return {
+        "query": {
+            "match": {
+                "content": {
+                    "query": search_query
+                }
+            }
+        },
+        "knn": {
+            "field": "ml.inference.content.predicted_value",
+            "k": 5,
+            "num_candidates": 50,
+            "query_vector_builder": {
+                "text_embedding": {
+                    "model_id": ".multilingual-e5-small_linux-x86_64",
+                    "model_text": search_query
+                }
+            }
+        },
+        "rank": {
+            "rrf": {
+                "window_size": 50,
+                "rank_constant": 20
+            }
         }
+
     }
 
 
@@ -259,7 +290,7 @@ def compressor_retriever(k, db, fetch_k):
     return compression_retriever
 
 
-def es_retriever_compressor_retriever(k,db, fetch_k):
+def es_retriever_compressor_retriever(k, db, fetch_k):
     compressor = CohereRerank()
     compression_retriever: ContextualCompressionRetriever = ContextualCompressionRetriever(
         base_compressor=compressor,
@@ -269,7 +300,7 @@ def es_retriever_compressor_retriever(k,db, fetch_k):
             username=ES_USER,
             password=ES_PWD,
             body_func=rrf_retriever,
-            document_mapper=custom_document_builder,
+            document_mapper=custom_document_builder
         )
     )
     return compression_retriever
@@ -278,7 +309,7 @@ def es_retriever_compressor_retriever(k,db, fetch_k):
 def main():
     # set up the retriever
     llm = None
-    if st.session_state.llm_model == 'Ollama/Mistral':
+    if st.session_state.llm_model == 'Ollama':
         llm = ChatOllama(base_url=st.session_state.llm_base_url,
                          model='mistral',
                          temperature=st.session_state.llm_temperature)
@@ -294,11 +325,19 @@ def main():
             openai_api_version="2024-02-15-preview",
             azure_deployment="yazid-gpt4",
         )
-    chain = get_conversational_rag_chain(llm=llm,
-                                         retriever=es_store_retriever(st.session_state.k,
-                                                                      vector_store,
-                                                                      st.session_state.num_candidates),
-                                         prompt_template=custom_template)
+    # init conversational rag chain
+    if st.session_state.rerank_results:
+        chain = get_conversational_rag_chain(llm=llm,
+                                             retriever=es_retriever_compressor_retriever(st.session_state.k,
+                                                                                         vector_store,
+                                                                                         st.session_state.num_candidates),
+                                             prompt_template=custom_template)
+    else:
+        chain = get_conversational_rag_chain(llm=llm,
+                                             retriever=es_store_retriever(st.session_state.k,
+                                                                          vector_store,
+                                                                          st.session_state.num_candidates),
+                                             prompt_template=custom_template)
 
     msgs = StreamlitChatMessageHistory()
 
